@@ -337,12 +337,34 @@ void display_process_table()
 *************************************************************************/
 void dispatcher()
 {
-    Process *nextProcess = NULL;
+    Process* nextProcess = NULL;
 
     /* IMPORTANT: context switch enables interrupts. */
     context_switch(nextProcess->context);
 
-} 
+    if (runningProcess == NULL)
+
+    {
+
+        nextProcess = readyList;
+    }
+    else if (runningProcess != readyList) {
+        nextProcess = readyList;
+
+
+
+
+
+    }
+
+
+
+
+
+
+    context_switch(nextProcess->context);
+}
+
 
 /**************************************************************************
    Name - watchdog
