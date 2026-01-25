@@ -9,7 +9,7 @@
 Process processTable[MAX_PROCESSES];
 Process *runningProcess = NULL;
 Process readyList[MAX_PROCESSES];
-int readyListEmpty = 1;
+int readyListCount = 0;
 int nextPid = 1;
 int debugFlag = 1;
 
@@ -22,7 +22,8 @@ static void check_deadlock();
 static void DebugConsole(char* format, ...);
 
 /* New functions */
-static int addToReadyTable(Process newProcess);
+static int addToReadyList(Process newProcess);
+static int shiftEntriesRight(int pos);
 
 /* DO NOT REMOVE */
 extern int SchedulerEntryPoint(void* pArgs);
@@ -132,19 +133,50 @@ int k_spawn(char* name, int (*entryPoint)(void *), void* arg, int stacksize, int
 
 
     /* Find an empty slot in the process table */
+    for (int i = 0; i < MAX_PROCESSES; i++)
+    {
+        if (processTable[i].pid == 0)
+        {
+            proc_slot = i;
+            break;
+        }
+    }
     
-    proc_slot = 1;  // just use 1 for now!
     pNewProc = &processTable[proc_slot];
 
     /* Setup the entry in the process table. */
     strcpy(pNewProc->name, name);
+    pNewProc->pid = nextPid;
+    nextPid++;  // Increment Pid counter
+    pNewProc->entryPoint = entryPoint;
+    pNewProc->priority = priority;
+    pNewProc->stacksize = stacksize;
+    pNewProc->status = READY;
 
     /* If there is a parent process,add this to the list of children. */
     if (runningProcess != NULL)
     {
+        if (runningProcess->pChildren == NULL)
+        {
+            runningProcess->pChildren = pNewProc;
+        }
+        else
+        {
+            Process* child = runningProcess->pChildren;
+
+            while (child->nextSiblingProcess != NULL)
+            {
+                child = child->nextSiblingProcess;
+            }
+
+            child->nextSiblingProcess = pNewProc;
+        }
+
+        pNewProc->pParent = runningProcess;
     }
 
     /* Add the process to the ready list. */
+    addToReadyList(*pNewProc);
 
     /* Initialize context for this process, but use launch function pointer for
      * the initial value of the process's program counter (PC)
@@ -388,11 +420,32 @@ int check_io_scheduler()
 
 /* NEW FUNCTIONS */
 
-static int addToReadyTable(Process newProcess)
+
+static int addToReadyList(Process newProcess)
 {
-    if(readyListEmpty)
+    if (readyListCount == MAX_PROCESSES)
+    {
+        DebugConsole("Failed to add process. The process list is full!\n");
+        return 0;
+    }
+    else if(readyListCount == 0)
     {
         readyList[0] = newProcess;
+        readyListCount++;
+        return 1; // Successfully added new process to ready table
+    }
+    else if(readyListCount == 1 && (newProcess.priority > readyList[0].priority))
+    {
+        readyList[1] = readyList[0];
+        readyList[0] = newProcess;
+        readyListCount++;
+        return 1; // Successfully added new process to ready table
+    }
+    else if (readyListCount == 1 && (newProcess.priority < readyList[0].priority))
+    {
+        readyList[1] = newProcess;
+        readyListCount++;
+        return 1; // Successfully added new process to ready table
     }
     else
     {
@@ -400,10 +453,22 @@ static int addToReadyTable(Process newProcess)
         {
             if (newProcess.priority > readyList[i].priority)
             {
-
+                shiftEntriesRight(i);
+                readyList[i] = newProcess;
+                readyListCount++;
+                return 1;
             }
         }
     }
 
-    return 1; // Successfully added new process to ready table
+    return 0; // Failed to add new process, this should never be reached
+}
+
+
+static int shiftEntriesRight(int pos)
+{
+    for (int i = readyListCount-1; i > pos; i++)
+    {
+        readyList[i] = readyList[i - 1];
+    }
 }
