@@ -8,15 +8,21 @@
 
 Process processTable[MAX_PROCESSES];
 Process *runningProcess = NULL;
+Process readyList[MAX_PROCESSES];
+int readyListEmpty = 1;
 int nextPid = 1;
 int debugFlag = 1;
 
+/* Provided functions */
 static int watchdog(char*);
 static inline void disableInterrupts();
 void dispatcher();
 static int launch(void *);
 static void check_deadlock();
 static void DebugConsole(char* format, ...);
+
+/* New functions */
+static int addToReadyTable(Process newProcess);
 
 /* DO NOT REMOVE */
 extern int SchedulerEntryPoint(void* pArgs);
@@ -55,9 +61,12 @@ int bootstrap(void *pArgs)
 
     /* Initialize the process table. */
 
+
     /* Initialize the Ready list, etc. */
 
+
     /* Initialize the clock interrupt handler */
+
 
     /* startup a watchdog process */
     result = k_spawn("watchdog", watchdog, NULL, THREADS_MIN_STACK_SIZE, LOWEST_PRIORITY);
@@ -373,4 +382,28 @@ static void DebugConsole(char* format, ...)
 int check_io_scheduler()
 {
     return false;
+}
+
+
+
+/* NEW FUNCTIONS */
+
+static int addToReadyTable(Process newProcess)
+{
+    if(readyListEmpty)
+    {
+        readyList[0] = newProcess;
+    }
+    else
+    {
+        for (int i = 0; i < MAX_PROCESSES; i++)
+        {
+            if (newProcess.priority > readyList[i].priority)
+            {
+
+            }
+        }
+    }
+
+    return 1; // Successfully added new process to ready table
 }
