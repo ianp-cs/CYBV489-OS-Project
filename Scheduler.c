@@ -8,6 +8,7 @@
 
 Process processTable[MAX_PROCESSES];
 Process *runningProcess = NULL;
+Process* readyListHead = NULL;
 int readyListCount = 0;
 int nextPid = 1;
 int debugFlag = 1;
@@ -421,20 +422,20 @@ int check_io_scheduler()
 
 static int addToReadyList(Process* newProcess)
 {
-    if (runningProcess == NULL) // This function is not responsible for determining who the running process should be, so bypass this function
+    if (readyListHead == NULL) 
     {
-        // This is for testing purposes only, comment out when not needed
-        //
-        runningProcess = newProcess;
+        readyListHead = newProcess;
         readyListCount++;
-        //
+
         return 0;
     }
 
-    if (readyListCount < MAX_PROCESSES)
+    // Ready list max size is one less than process table max size, 
+    // because we don't include the currently running process
+    if (readyListCount < MAX_PROCESSES-1) 
     {
-        Process* currProcess = runningProcess;
-        Process* nextProcess = runningProcess->nextReadyProcess;
+        Process* currProcess = readyListHead;
+        Process* nextProcess = readyListHead->nextReadyProcess;
 
         while (nextProcess != NULL)
         {
@@ -447,7 +448,7 @@ static int addToReadyList(Process* newProcess)
     }
     else
     {
-        DebugConsole("Failed to add process. The process list is full!\n");
+        DebugConsole("Failed to add process. The ready list is full!\n");
         return -1;
     }
 }
