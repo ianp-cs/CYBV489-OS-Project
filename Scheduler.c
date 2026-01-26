@@ -8,7 +8,6 @@
 
 Process processTable[MAX_PROCESSES];
 Process *runningProcess = NULL;
-Process readyList[MAX_PROCESSES];
 int readyListCount = 0;
 int nextPid = 1;
 int debugFlag = 1;
@@ -22,8 +21,7 @@ static void check_deadlock();
 static void DebugConsole(char* format, ...);
 
 /* New functions */
-static int addToReadyList(Process newProcess);
-static int shiftEntriesRight(int pos);
+static int addToReadyList(Process* newProcess);
 
 /* DO NOT REMOVE */
 extern int SchedulerEntryPoint(void* pArgs);
@@ -67,7 +65,6 @@ int bootstrap(void *pArgs)
 
 
     /* Initialize the clock interrupt handler */
-
 
     /* startup a watchdog process */
     result = k_spawn("watchdog", watchdog, NULL, THREADS_MIN_STACK_SIZE, LOWEST_PRIORITY);
@@ -176,7 +173,7 @@ int k_spawn(char* name, int (*entryPoint)(void *), void* arg, int stacksize, int
     }
 
     /* Add the process to the ready list. */
-    addToReadyList(*pNewProc);
+    addToReadyList(pNewProc);
 
     /* Initialize context for this process, but use launch function pointer for
      * the initial value of the process's program counter (PC)
@@ -339,30 +336,9 @@ void dispatcher()
 {
     Process* nextProcess = NULL;
 
-    /* IMPORTANT: context switch enables interrupts. */
     context_switch(nextProcess->context);
 
-    if (runningProcess == NULL)
-
-    {
-
-        nextProcess = readyList;
-    }
-    else if (runningProcess != readyList) {
-        nextProcess = readyList;
-
-
-
-
-
-    }
-
-
-
-
-
-
-    context_switch(nextProcess->context);
+    // If currently running process is highest priority, don't change context
 }
 
 
@@ -443,54 +419,35 @@ int check_io_scheduler()
 /* NEW FUNCTIONS */
 
 
-static int addToReadyList(Process newProcess)
+static int addToReadyList(Process* newProcess)
 {
-    if (readyListCount == MAX_PROCESSES)
+    if (runningProcess == NULL) // This function is not responsible for determining who the running process should be, so bypass this function
     {
-        DebugConsole("Failed to add process. The process list is full!\n");
+        // This is for testing purposes only, comment out when not needed
+        //
+        runningProcess = newProcess;
+        readyListCount++;
+        //
         return 0;
     }
-    else if(readyListCount == 0)
+
+    if (readyListCount < MAX_PROCESSES)
     {
-        readyList[0] = newProcess;
+        Process* currProcess = runningProcess;
+        Process* nextProcess = runningProcess->nextReadyProcess;
+
+        while (nextProcess != NULL)
+        {
+            currProcess = currProcess->nextReadyProcess;
+            nextProcess = currProcess->nextReadyProcess;
+        }
+
+        currProcess->nextReadyProcess = newProcess;
         readyListCount++;
-        return 1; // Successfully added new process to ready table
-    }
-    else if(readyListCount == 1 && (newProcess.priority > readyList[0].priority))
-    {
-        readyList[1] = readyList[0];
-        readyList[0] = newProcess;
-        readyListCount++;
-        return 1; // Successfully added new process to ready table
-    }
-    else if (readyListCount == 1 && (newProcess.priority < readyList[0].priority))
-    {
-        readyList[1] = newProcess;
-        readyListCount++;
-        return 1; // Successfully added new process to ready table
     }
     else
     {
-        for (int i = 0; i < MAX_PROCESSES; i++)
-        {
-            if (newProcess.priority > readyList[i].priority)
-            {
-                shiftEntriesRight(i);
-                readyList[i] = newProcess;
-                readyListCount++;
-                return 1;
-            }
-        }
-    }
-
-    return 0; // Failed to add new process, this should never be reached
-}
-
-
-static int shiftEntriesRight(int pos)
-{
-    for (int i = readyListCount-1; i > pos; i++)
-    {
-        readyList[i] = readyList[i - 1];
+        DebugConsole("Failed to add process. The process list is full!\n");
+        return -1;
     }
 }
