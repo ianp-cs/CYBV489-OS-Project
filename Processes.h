@@ -24,3 +24,12 @@ typedef struct _process
 	int            status;            /* READY, QUIT, BLOCKED, etc. */
 
 } Process;
+
+typedef struct _queue
+{
+	Process* head;		// First process in queue
+	Process* tail;		// Last process in queue
+	int			size;		// Total number of processes in queue
+	int			priority;	// The priority of the processes in the queue
+
+} Queue;

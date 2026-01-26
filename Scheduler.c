@@ -8,8 +8,7 @@
 
 Process processTable[MAX_PROCESSES];
 Process *runningProcess = NULL;
-Process* readyListHead = NULL;
-int readyListCount = 0;
+Queue readyLists[HIGHEST_PRIORITY + 1]; // +1 to account for priority 0; index = priority
 int nextPid = 1;
 int debugFlag = 1;
 
@@ -22,7 +21,8 @@ static void check_deadlock();
 static void DebugConsole(char* format, ...);
 
 /* New functions */
-static int addToReadyList(Process* newProcess);
+int push(Queue* target, Process* node);
+Process* pop(Queue* target);
 
 /* DO NOT REMOVE */
 extern int SchedulerEntryPoint(void* pArgs);
@@ -55,6 +55,7 @@ check_io_function check_io;
 int bootstrap(void *pArgs)
 {
     int result; /* value returned by call to spawn() */
+    set_psr(PSR_KERNEL_MODE);
 
     /* set this to the scheduler version of this function.*/
     check_io = check_io_scheduler;
@@ -63,7 +64,13 @@ int bootstrap(void *pArgs)
 
 
     /* Initialize the Ready list, etc. */
-
+    for (int i = 0; i < HIGHEST_PRIORITY + 1; i++)
+    {
+        readyLists[i].head = NULL;
+        readyLists[i].tail = NULL;
+        readyLists[i].size = 0;
+        readyLists[i].priority = i;
+    }
 
     /* Initialize the clock interrupt handler */
 
@@ -84,6 +91,7 @@ int bootstrap(void *pArgs)
     }
 
     /* Initialized and ready to go!! */
+    // dispatcher();
 
     /* This should never return since we are not a real process. */
 
@@ -113,6 +121,12 @@ int k_spawn(char* name, int (*entryPoint)(void *), void* arg, int stacksize, int
     int proc_slot;
     struct _process* pNewProc;
 
+    if (get_psr() != PSR_KERNEL_MODE)
+    {
+        console_output(debugFlag, "spawn(): Not in Kernel Mode.\n");
+        return -3;
+    }
+
     DebugConsole("spawn(): creating process %s\n", name);
 
     disableInterrupts();
@@ -127,6 +141,18 @@ int k_spawn(char* name, int (*entryPoint)(void *), void* arg, int stacksize, int
     {
         console_output(debugFlag, "spawn(): Process name is too long.  Halting...\n");
         stop( 1);
+    }
+
+    if (stacksize < THREADS_MIN_STACK_SIZE)
+    {
+        console_output(debugFlag, "spawn(): Stack size is too small.\n");
+        return -4;
+    }
+
+    if (priority < LOWEST_PRIORITY || priority > HIGHEST_PRIORITY)
+    {
+        console_output(debugFlag, "spawn(): Invalid priority.\n");
+        return -5;
     }
 
 
@@ -174,12 +200,17 @@ int k_spawn(char* name, int (*entryPoint)(void *), void* arg, int stacksize, int
     }
 
     /* Add the process to the ready list. */
-    addToReadyList(pNewProc);
+    if (push(&readyLists[pNewProc->priority], pNewProc) == 0)
+    {
+        return -2;
+    }
 
     /* Initialize context for this process, but use launch function pointer for
      * the initial value of the process's program counter (PC)
     */
     pNewProc->context = context_initialize(launch, stacksize, arg);
+
+    // dispatcher();
 
     return pNewProc->pid;
 
@@ -420,35 +451,55 @@ int check_io_scheduler()
 /* NEW FUNCTIONS */
 
 
-static int addToReadyList(Process* newProcess)
+int push(Queue* target, Process* node)
 {
-    if (readyListHead == NULL) 
+    if (target->size == (MAX_PROCESSES - 1))
     {
-        readyListHead = newProcess;
-        readyListCount++;
-
-        return 0;
+        console_output(TRUE, "Could not add Process '%s' to Queue %d, the Queue is full.\n", node->name, target->priority);
+        return -1;
     }
-
-    // Ready list max size is one less than process table max size, 
-    // because we don't include the currently running process
-    if (readyListCount < MAX_PROCESSES-1) 
+    else if (target->priority != node->priority)
     {
-        Process* currProcess = readyListHead;
-        Process* nextProcess = readyListHead->nextReadyProcess;
-
-        while (nextProcess != NULL)
-        {
-            currProcess = currProcess->nextReadyProcess;
-            nextProcess = currProcess->nextReadyProcess;
-        }
-
-        currProcess->nextReadyProcess = newProcess;
-        readyListCount++;
+        console_output(TRUE, "Could not add Process '%s' to Queue %d, Process and Queue priorities do not match.\n", node->name, target->priority);
+        return -1;
+    }
+    else if (target->size == 0)
+    {
+        target->head = node;
+        target->tail = node;
+        target->size += 1;
+        return target->size;
     }
     else
     {
-        DebugConsole("Failed to add process. The ready list is full!\n");
-        return -1;
+        target->tail->nextReadyProcess = node;
+        target->tail = node;
+        target->size += 1;
+        return target->size;
+    }
+}
+
+
+Process* pop(Queue* target)
+{
+    Process* node = NULL;
+
+    if (target->size == 0)
+    {
+        console_output(TRUE, "Could not pop from Queue %d, the Queue is empty.\n", target->priority);
+    }
+    else if (target->size == 1)
+    {
+        node = target->head;
+        target->head = NULL;
+        target->tail = NULL;
+        target->size -= 1;
+    }
+    else
+    {
+        node = target->head;
+        target->head = node->nextReadyProcess;
+        node->nextReadyProcess = NULL;
+        target->size -= 1;
     }
 }
