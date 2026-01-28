@@ -6,9 +6,11 @@
 #include "Scheduler.h"
 #include "Processes.h"
 
+#define NUM_PRIORITIES (HIGHEST_PRIORITY + 1)
+
 Process processTable[MAX_PROCESSES];
 Process *runningProcess = NULL;
-Queue readyLists[HIGHEST_PRIORITY + 1]; // +1 to account for priority 0; index = priority
+Queue readyLists[NUM_PRIORITIES]; // +1 to account for priority 0; index = priority
 int nextPid = 1;
 int debugFlag = 1;
 
@@ -21,8 +23,12 @@ static void check_deadlock();
 static void DebugConsole(char* format, ...);
 
 /* New functions */
-int push(Queue* target, Process* node);
-Process* pop(Queue* target);
+static int push(Queue* target, Process* node);
+static Process* pop(Queue* target);
+static int boolAvailableProcesses();
+static int isHighestPriorityProcess(Process* target);
+static Process* getHighestPriorityProcess();
+static void cleanUpChild(Process* target);
 
 /* DO NOT REMOVE */
 extern int SchedulerEntryPoint(void* pArgs);
@@ -64,7 +70,7 @@ int bootstrap(void *pArgs)
 
 
     /* Initialize the Ready list, etc. */
-    for (int i = 0; i < HIGHEST_PRIORITY + 1; i++)
+    for (int i = 0; i < NUM_PRIORITIES; i++)
     {
         readyLists[i].head = NULL;
         readyLists[i].tail = NULL;
@@ -74,8 +80,9 @@ int bootstrap(void *pArgs)
 
     /* Initialize the clock interrupt handler */
 
+
     /* startup a watchdog process */
-    result = k_spawn("watchdog", watchdog, NULL, THREADS_MIN_STACK_SIZE, LOWEST_PRIORITY);
+    result = k_spawn("watchdog", watchdog, NULL, THREADS_MIN_STACK_SIZE, LOWEST_PRIORITY); // Will always be pid = 1
     if (result < 0)
     {
         console_output(debugFlag, "Scheduler(): spawn for watchdog returned an error (%d), stopping...\n", result);
@@ -83,7 +90,7 @@ int bootstrap(void *pArgs)
     }
 
     /* start the test process, which is the main for each test program.  */
-    result = k_spawn("Scheduler", SchedulerEntryPoint, NULL, 2 * THREADS_MIN_STACK_SIZE, HIGHEST_PRIORITY);
+    result = k_spawn("Scheduler", SchedulerEntryPoint, NULL, 2 * THREADS_MIN_STACK_SIZE, HIGHEST_PRIORITY); // Will always be pid = 2
     if (result < 0)
     {
         console_output(debugFlag,"Scheduler(): spawn for SchedulerEntryPoint returned an error (%d), stopping...\n", result);
@@ -91,7 +98,7 @@ int bootstrap(void *pArgs)
     }
 
     /* Initialized and ready to go!! */
-    // dispatcher();
+    dispatcher();
 
     /* This should never return since we are not a real process. */
 
@@ -121,11 +128,15 @@ int k_spawn(char* name, int (*entryPoint)(void *), void* arg, int stacksize, int
     int proc_slot;
     struct _process* pNewProc;
 
+    /*
     if (get_psr() != PSR_KERNEL_MODE)
     {
         console_output(debugFlag, "spawn(): Not in Kernel Mode.\n");
         return -3;
     }
+    */
+
+    set_psr(PSR_KERNEL_MODE);
 
     DebugConsole("spawn(): creating process %s\n", name);
 
@@ -176,6 +187,7 @@ int k_spawn(char* name, int (*entryPoint)(void *), void* arg, int stacksize, int
     pNewProc->priority = priority;
     pNewProc->stacksize = stacksize;
     pNewProc->status = READY;
+    pNewProc->exitCode = 0;
 
     /* If there is a parent process,add this to the list of children. */
     if (runningProcess != NULL)
@@ -210,7 +222,10 @@ int k_spawn(char* name, int (*entryPoint)(void *), void* arg, int stacksize, int
     */
     pNewProc->context = context_initialize(launch, stacksize, arg);
 
-    // dispatcher();
+    if (pNewProc->pid != 1) // Skip this function call for Watchdog
+    {
+        dispatcher();
+    }
 
     return pNewProc->pid;
 
@@ -229,15 +244,20 @@ int k_spawn(char* name, int (*entryPoint)(void *), void* arg, int stacksize, int
 *************************************************************************/
 static int launch(void *args)
 {
+    int result;
 
     DebugConsole("launch(): started: %s\n", runningProcess->name);
 
     /* Enable interrupts */
+    set_psr(PSR_INTERRUPTS);
 
     /* Call the function passed to spawn and capture its return value */
+    result = runningProcess->entryPoint(runningProcess->startArgs);
+
     DebugConsole("Process %d returned to launch\n", runningProcess->pid);
 
     /* Stop the process gracefully */
+    k_exit(result);
 
     return 0;
 } 
@@ -251,13 +271,47 @@ static int launch(void *args)
    Parameters - Output parameter for the child's exit code. 
 
    Returns - the pid of the quitting child, or
-        -4 if the process has no children
+        -1 if the process has no children
         -5 if the process was signaled in the join
 
 ************************************************************************ */
 int k_wait(int* code)
 {
     int result = 0;
+    Process* child = runningProcess->pChildren;
+
+    if (child == NULL) // Case: Process has no children
+    {
+        return -1;
+    }
+
+    while (child != NULL) // Case: a child has already exited
+    {
+        if (child->status == QUIT)
+        {
+            code = child->exitCode;
+            result = child->pid;
+            cleanUpChild(child);
+            return result;
+        }
+    }
+
+    child = runningProcess->pChildren; // Reset to head of children linked list
+
+    runningProcess->status = BLOCKED; // Case: no child has exited yet and this process must wait
+    dispatcher();
+
+    while (child != NULL) // Find exited child
+    {
+        if (child->status == QUIT)
+        {
+            code = child->exitCode;
+            result = child->pid;
+            cleanUpChild(child);
+            break;
+        }
+    }
+
     return result;
 
 } 
@@ -275,8 +329,26 @@ int k_wait(int* code)
 *************************************************************************/
 void k_exit(int code)
 {
+    // Exiting process should not have children, halt program if it does
+    if (runningProcess->pChildren != NULL) 
+    {
+        console_output(debugFlag, "k_exit(): Exiting process has active children, closing program.\n");
+        stop(1);
+    }
 
+    // If the process has a blocked parent, unblock it
+    if (runningProcess->pParent != NULL && runningProcess->pParent->status == BLOCKED) 
+    {
+        int index = runningProcess->pParent->priority;
 
+        runningProcess->pParent->status = READY;
+        push(&readyLists[index], runningProcess->pParent);
+    }
+    
+    runningProcess->status = QUIT;
+    runningProcess->exitCode = code;
+
+    dispatcher();
 }
 
 /**************************************************************************
@@ -368,7 +440,48 @@ void dispatcher()
 {
     Process* nextProcess = NULL;
 
-    context_switch(nextProcess->context);
+    // No process was running
+    if (runningProcess == NULL) 
+    {
+        nextProcess = getHighestPriorityProcess();
+    }
+    // Current process has been blocked by another process or has exited, do not add to readyLists
+    else if (runningProcess->status == BLOCKED || runningProcess->status == QUIT)
+    {
+        nextProcess = getHighestPriorityProcess();
+    }
+    // Current process is still the higest priority
+    else if (isHighestPriorityProcess(runningProcess)) 
+    {
+        return;
+    }
+    // Otherwise, reassess which process should run after adding current process back into readyLists
+    else 
+    {
+        Process* previousProcess = runningProcess;
+        runningProcess = NULL;
+
+        for (int i = 0; i < NUM_PRIORITIES; i++) // Add previous process back into the ready lists
+        {
+            if (previousProcess->priority == i)
+            {
+                previousProcess->status = READY;
+                push(&readyLists[i], previousProcess);
+                break;
+            }
+        }
+
+        nextProcess = getHighestPriorityProcess();
+    }
+
+    if (nextProcess == NULL)
+    {
+        console_output(debugFlag, "Dispatcher(): Attempting to switch context to NULL process, closing program...\n");
+        stop(1);
+    }
+
+    runningProcess = nextProcess;
+    context_switch(runningProcess->context);
 
     // If currently running process is highest priority, don't change context
 }
@@ -398,6 +511,19 @@ static int watchdog(char* dummy)
 /* check to determine if deadlock has occurred... */
 static void check_deadlock()
 {
+    if (check_io() == 1)
+    {
+        return;
+    }
+
+    if (boolAvailableProcesses())
+    {
+        stop(1);
+    }
+    else
+    {
+        stop(0);
+    }
 }
 
 /*
@@ -451,7 +577,7 @@ int check_io_scheduler()
 /* NEW FUNCTIONS */
 
 
-int push(Queue* target, Process* node)
+static int push(Queue* target, Process* node)
 {
     if (target->size == (MAX_PROCESSES - 1))
     {
@@ -480,7 +606,7 @@ int push(Queue* target, Process* node)
 }
 
 
-Process* pop(Queue* target)
+static Process* pop(Queue* target)
 {
     Process* node = NULL;
 
@@ -501,5 +627,91 @@ Process* pop(Queue* target)
         target->head = node->nextReadyProcess;
         node->nextReadyProcess = NULL;
         target->size -= 1;
+    }
+
+    return node;
+}
+
+
+static int boolAvailableProcesses()
+{
+    if (runningProcess != NULL)
+    {
+        return true;
+    }
+    for (int i = 1; i < NUM_PRIORITIES; i++) // Skip lowest priority
+    {
+        if (readyLists[i].size > 0)
+        {
+            return true;
+        }
+    }
+    if (readyLists[0].size > 1) // Watchdog should be running
+    {
+        return true;
+    }
+
+    return false;
+}
+
+
+static int isHighestPriorityProcess(Process* target)
+{
+    for (int i = HIGHEST_PRIORITY; i >= target->priority; i--)
+    {
+        if (readyLists[i].size > 0)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+static Process* getHighestPriorityProcess()
+{
+    for (int i = HIGHEST_PRIORITY; i >= 0; i--)
+    {
+        if (readyLists[i].size > 0)
+        {
+            return pop(&readyLists[i]);
+        }
+    }
+
+    return NULL;
+}
+
+
+static void cleanUpChild(Process* target)
+{
+    Process blankProcess;
+
+    // Remove from parent, if it is the head of the children list
+    if (runningProcess->pChildren->pid == target->pid)
+    {
+        runningProcess->pChildren = target->nextSiblingProcess;
+    }
+    // Remove from sibling chain if it isn't
+    else
+    {
+        Process* child = runningProcess->pChildren;
+
+        while (child->nextSiblingProcess->pid != target->pid);
+        {
+            child = child->nextSiblingProcess;
+        }
+
+        child->nextSiblingProcess = target->nextSiblingProcess;
+    }
+
+    // Clear child from the process table
+    for (int i = 0; i < MAX_PROCESSES; i++)
+    {
+        if (processTable[i].pid == target->pid)
+        {
+            blankProcess.pid = 0;
+            processTable[i] = blankProcess;
+        }
     }
 }

@@ -13,22 +13,23 @@ typedef struct _process
 	struct _process*		pParent;   
 	struct _process*        pChildren;
 
-	char           name[MAXNAME];     /* Process name */
-	char           startArgs[MAXARG]; /* Process arguments */
-	void*		   context;           /* Process's current context */
-	short          pid;               /* Process id (pid) */
+	char           name[MAXNAME];		/* Process name */
+	char           startArgs[MAXARG];	/* Process arguments */
+	void*		   context;				/* Process's current context */
+	short          pid;					/* Process id (pid) */
 	int            priority;
-	int (*entryPoint) (void*);        /* The entry point that is called from launch */
+	int (*entryPoint) (void*);			/* The entry point that is called from launch */
 	char*	       stack;
 	unsigned int   stacksize;
-	int            status;            /* READY, QUIT, BLOCKED, etc. */
+	int            status;				/* READY, QUIT, BLOCKED, etc. */
+	int			   exitCode;			// The code needed by k_wait() and is input into k_exit()
 
 } Process;
 
 typedef struct _queue
 {
-	Process* head;		// First process in queue
-	Process* tail;		// Last process in queue
+	Process*	head;		// First process in queue
+	Process*	tail;		// Last process in queue
 	int			size;		// Total number of processes in queue
 	int			priority;	// The priority of the processes in the queue
 
