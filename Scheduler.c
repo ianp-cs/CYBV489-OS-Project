@@ -60,6 +60,8 @@ check_io_function check_io;
  *************************************************************************/
 int bootstrap(void *pArgs)
 {
+    set_debug_level(0); // COMMENT THIS LINE OUT TO ENABLE DEBUG MESSAGES
+
     int result; /* value returned by call to spawn() */
     set_psr(PSR_KERNEL_MODE);
 
@@ -189,6 +191,11 @@ int k_spawn(char* name, int (*entryPoint)(void *), void* arg, int stacksize, int
     pNewProc->status = READY;
     pNewProc->exitCode = 0;
 
+    if (arg != NULL)
+    {
+        strcpy(pNewProc->startArgs, arg);
+    }
+
     /* If there is a parent process,add this to the list of children. */
     if (runningProcess != NULL)
     {
@@ -289,11 +296,13 @@ int k_wait(int* code)
     {
         if (child->status == QUIT)
         {
-            code = child->exitCode;
+            *code = child->exitCode;
             result = child->pid;
             cleanUpChild(child);
             return result;
         }
+
+        child = child->nextSiblingProcess;
     }
 
     child = runningProcess->pChildren; // Reset to head of children linked list
@@ -305,11 +314,13 @@ int k_wait(int* code)
     {
         if (child->status == QUIT)
         {
-            code = child->exitCode;
+            *code = child->exitCode;
             result = child->pid;
             cleanUpChild(child);
             break;
         }
+
+        child = child->nextSiblingProcess;
     }
 
     return result;
@@ -522,6 +533,7 @@ static void check_deadlock()
     }
     else
     {
+        console_output(false, "All processes completed.\n");
         stop(0);
     }
 }
@@ -635,10 +647,6 @@ static Process* pop(Queue* target)
 
 static int boolAvailableProcesses()
 {
-    if (runningProcess != NULL)
-    {
-        return true;
-    }
     for (int i = 1; i < NUM_PRIORITIES; i++) // Skip lowest priority
     {
         if (readyLists[i].size > 0)
