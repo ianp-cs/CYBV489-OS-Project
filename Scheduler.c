@@ -1,3 +1,16 @@
+/*
+Program: Scheduler
+Modified by: Ian Penrose & Lindsay Wax
+Created by: Professor Mike Duren, University of Arizona
+Course: CYBV 489
+
+
+Description: This file acts as the scheduler for the "Operating System" within the THREADS
+environment. Processes are created here, controlled by a dispatcher utilizing a round-
+robin with priority system, and then exit.
+*/
+
+
 
 #define _CRT_SECURE_NO_WARNINGS
 
@@ -6,13 +19,13 @@
 #include "Scheduler.h"
 #include "Processes.h"
 
-#define NUM_PRIORITIES (HIGHEST_PRIORITY + 1)
+#define NUM_PRIORITIES (HIGHEST_PRIORITY + 1)   // +1 to account for the lowest priority being 0
 
-Process processTable[MAX_PROCESSES];
-Process *runningProcess = NULL;
-Queue readyLists[NUM_PRIORITIES]; // +1 to account for priority 0; index = priority
-int nextPid = 1;
-int debugFlag = 1;
+Process processTable[MAX_PROCESSES];    // This table holds every currently existing process, regardless of their status
+Process *runningProcess = NULL;         // The currently running process, aka the current context
+Queue readyLists[NUM_PRIORITIES];       // +1 to account for priority 0; index = priority
+int nextPid = 1;                        // Controls the id of the next created process
+int debugFlag = 1;                      // If set for console output, the text may not appear if debugging mode is off
 
 /* Provided functions */
 static int watchdog(char*);
@@ -69,7 +82,10 @@ int bootstrap(void *pArgs)
     check_io = check_io_scheduler;
 
     /* Initialize the process table. */
-
+    for (int i = 0; i < MAX_PROCESSES; i++)
+    {
+        processTable[i].pid = 0;
+    }
 
     /* Initialize the Ready list, etc. */
     for (int i = 0; i < NUM_PRIORITIES; i++)
@@ -138,13 +154,15 @@ int k_spawn(char* name, int (*entryPoint)(void *), void* arg, int stacksize, int
     }
     */
 
-    set_psr(PSR_KERNEL_MODE);
+    // Documentation says to check for Kernel Mode, but it doesn't say where Kernel mode should be activated?
+    // This will likely need to be fixed while working on future milestones when we have more information!
+    set_psr(PSR_KERNEL_MODE); 
 
     DebugConsole("spawn(): creating process %s\n", name);
 
     disableInterrupts();
 
-    /* Validate all of the parameters, starting with the name. */
+    /* Validate all of the parameters*/
     if (name == NULL)
     {
         console_output(debugFlag, "spawn(): Name value is NULL.\n");
@@ -155,21 +173,18 @@ int k_spawn(char* name, int (*entryPoint)(void *), void* arg, int stacksize, int
         console_output(debugFlag, "spawn(): Process name is too long.  Halting...\n");
         stop( 1);
     }
-
     if (stacksize < THREADS_MIN_STACK_SIZE)
     {
         console_output(debugFlag, "spawn(): Stack size is too small.\n");
         return -4;
     }
-
     if (priority < LOWEST_PRIORITY || priority > HIGHEST_PRIORITY)
     {
         console_output(debugFlag, "spawn(): Invalid priority.\n");
         return -5;
     }
 
-
-    /* Find an empty slot in the process table */
+    /* Find an empty slot in the process table and save the index*/
     for (int i = 0; i < MAX_PROCESSES; i++)
     {
         if (processTable[i].pid == 0)
@@ -179,7 +194,8 @@ int k_spawn(char* name, int (*entryPoint)(void *), void* arg, int stacksize, int
         }
     }
     
-    pNewProc = &processTable[proc_slot];
+    // Point to memory location for the new procedure
+    pNewProc = &processTable[proc_slot]; 
 
     /* Setup the entry in the process table. */
     strcpy(pNewProc->name, name);
@@ -191,12 +207,14 @@ int k_spawn(char* name, int (*entryPoint)(void *), void* arg, int stacksize, int
     pNewProc->status = READY;
     pNewProc->exitCode = 0;
 
+    // Some processes don't have args, so we need to account for NULL
     if (arg != NULL)
     {
         strcpy(pNewProc->startArgs, arg);
     }
 
-    /* If there is a parent process,add this to the list of children. */
+    
+    // If there is a parent process, link the parent and this process to each other.
     if (runningProcess != NULL)
     {
         if (runningProcess->pChildren == NULL)
@@ -224,18 +242,19 @@ int k_spawn(char* name, int (*entryPoint)(void *), void* arg, int stacksize, int
         return -2;
     }
 
-    /* Initialize context for this process, but use launch function pointer for
-     * the initial value of the process's program counter (PC)
+    /* 
+    Initialize context for this process, but use launch function pointer for
+    the initial value of the process's program counter (PC)
     */
     pNewProc->context = context_initialize(launch, stacksize, arg);
 
-    if (pNewProc->pid != 1) // Skip this function call for Watchdog
+    // Skip this function call for Watchdog and Scheduler, we need to finish initializing
+    if (pNewProc->pid > 2) 
     {
         dispatcher();
     }
 
     return pNewProc->pid;
-
 
 } /* spawn */
 
@@ -287,14 +306,16 @@ int k_wait(int* code)
     int result = 0;
     Process* child = runningProcess->pChildren;
 
-    if (child == NULL) // Case: Process has no children
+    // Case: Process has no children
+    if (child == NULL) 
     {
         return -1;
     }
 
-    while (child != NULL) // Case: a child has already exited
+    // Case: a child has already exited
+    while (child != NULL) 
     {
-        if (child->status == QUIT)
+        if (child->status == QUIT) // Find the child and clean it up
         {
             *code = child->exitCode;
             result = child->pid;
@@ -302,17 +323,19 @@ int k_wait(int* code)
             return result;
         }
 
-        child = child->nextSiblingProcess;
+        child = child->nextSiblingProcess; // Set new head of children linked list for the parent
     }
+
+    // Case: no child has exited yet and this process must wait
 
     child = runningProcess->pChildren; // Reset to head of children linked list
 
-    runningProcess->status = BLOCKED; // Case: no child has exited yet and this process must wait
+    runningProcess->status = BLOCKED; // Block the parent and wait for control to be returned
     dispatcher();
 
     while (child != NULL) // Find exited child
     {
-        if (child->status == QUIT)
+        if (child->status == QUIT) // Find the child and clean it up
         {
             *code = child->exitCode;
             result = child->pid;
@@ -320,7 +343,7 @@ int k_wait(int* code)
             break;
         }
 
-        child = child->nextSiblingProcess;
+        child = child->nextSiblingProcess; // Set new head of children linked list for the parent
     }
 
     return result;
@@ -356,9 +379,11 @@ void k_exit(int code)
         push(&readyLists[index], runningProcess->pParent);
     }
     
+    // Signal to parent that this process needs to be cleaned up
     runningProcess->status = QUIT;
     runningProcess->exitCode = code;
 
+    // Surrender control and wait to be cleaned up
     dispatcher();
 }
 
@@ -449,7 +474,7 @@ void display_process_table()
 *************************************************************************/
 void dispatcher()
 {
-    Process* nextProcess = NULL;
+    Process* nextProcess = NULL; // Points to the next process that should run
 
     // No process was running
     if (runningProcess == NULL) 
@@ -472,15 +497,9 @@ void dispatcher()
         Process* previousProcess = runningProcess;
         runningProcess = NULL;
 
-        for (int i = 0; i < NUM_PRIORITIES; i++) // Add previous process back into the ready lists
-        {
-            if (previousProcess->priority == i)
-            {
-                previousProcess->status = READY;
-                push(&readyLists[i], previousProcess);
-                break;
-            }
-        }
+        // Add previous process back into the ready lists
+        previousProcess->status = READY;
+        push(&readyLists[previousProcess->priority], previousProcess);
 
         nextProcess = getHighestPriorityProcess();
     }
@@ -491,10 +510,9 @@ void dispatcher()
         stop(1);
     }
 
+    // Give control to the next process
     runningProcess = nextProcess;
     context_switch(runningProcess->context);
-
-    // If currently running process is highest priority, don't change context
 }
 
 
@@ -588,7 +606,17 @@ int check_io_scheduler()
 
 /* NEW FUNCTIONS */
 
+/**************************************************************************
+   Name - push
 
+   Purpose - The Process node is added to the end of the priority queue
+        pointed to by target.
+
+   Parameters - target, a pointer to a priority Queue
+                node, a pointed to a node that is to be added to target
+
+   Returns - -1 if an error occurs, otherwise returns the new size of target
+   *************************************************************************/
 static int push(Queue* target, Process* node)
 {
     if (target->size == (MAX_PROCESSES - 1))
@@ -617,7 +645,17 @@ static int push(Queue* target, Process* node)
     }
 }
 
+/**************************************************************************
+   Name - pop
 
+   Purpose - Retrieves the first node of target priority Queue, removes it
+        from the Queue, and returns it.
+
+   Parameters - target, a pointer to a priority Queue
+
+   Returns - NULL if an error occurs, otherwise returns the Process popped
+        from target
+   *************************************************************************/
 static Process* pop(Queue* target)
 {
     Process* node = NULL;
@@ -644,7 +682,17 @@ static Process* pop(Queue* target)
     return node;
 }
 
+/**************************************************************************
+   Name - boolAvailableProcesses
 
+   Purpose - Determines if there are any processes available, excluding 
+        Watchdog, and returns a boolean based on the determination.
+
+   Parameters - none
+
+   Returns - true if there are processes available (besides Watchdog), otherwise
+        returns false
+   *************************************************************************/
 static int boolAvailableProcesses()
 {
     for (int i = 1; i < NUM_PRIORITIES; i++) // Skip lowest priority
@@ -662,7 +710,18 @@ static int boolAvailableProcesses()
     return false;
 }
 
+/**************************************************************************
+   Name - isHighestPriorityProcess
 
+   Purpose - Each priority Queue is searched to find any Process that is 
+        a higher or equal priority compared to the target's, and returns a 
+        boolean reflecting if there is one or not.
+
+   Parameters - target, a pointer to a Process
+
+   Returns - true if no Process is found with a higher or equal priority,
+        otherwise returns false
+   *************************************************************************/
 static int isHighestPriorityProcess(Process* target)
 {
     for (int i = HIGHEST_PRIORITY; i >= target->priority; i--)
@@ -676,7 +735,17 @@ static int isHighestPriorityProcess(Process* target)
     return true;
 }
 
+/**************************************************************************
+   Name - getHighestPriorityProcess
 
+   Purpose - Each priority Queue is searched for the highest priority Process,
+        pops it from its Queue, and returns it.
+
+   Parameters - none
+
+   Returns - Null if there are no Processes (which is an error), otherwise
+        returns a pointer to the highest priority Process
+   *************************************************************************/
 static Process* getHighestPriorityProcess()
 {
     for (int i = HIGHEST_PRIORITY; i >= 0; i--)
@@ -687,10 +756,21 @@ static Process* getHighestPriorityProcess()
         }
     }
 
-    return NULL;
+    return NULL; // This line should never run!
 }
 
+/**************************************************************************
+   Name - cleanUpChild
 
+   Purpose - This helper function is called by a parent Process to clean up
+        and remove a child Process pointed to by target. All pointers to
+        it from other Processes cleared or changed, and the child is
+        removed from the Process table.
+
+   Parameters - target, a pointer to a Process
+
+   Returns - none
+   *************************************************************************/
 static void cleanUpChild(Process* target)
 {
     Process blankProcess;

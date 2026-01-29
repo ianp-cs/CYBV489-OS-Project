@@ -1,35 +1,46 @@
+/*
+Modified by: Ian Penrose & Lindsay Wax
+Created by: Professor Mike Duren, University of Arizona
+Course: CYBV 489
+*/
+
 #pragma once
 
-#define READY 1
-#define QUIT 2
-#define BLOCKED 3
-#define RUNNING 4
+#define READY 1		// Waiting to run
+#define QUIT 2		// Waiting to be cleaned up and removed
+#define BLOCKED 3	// Waiting for a child or joined process to finish running
+#define RUNNING 4	// Actively running; is the current running process
 
+/*
+Processes are the simulated processes created and used by the "Operating System" in the THREADS environment.
+*/
 typedef struct _process
 {
-	struct _process*        nextReadyProcess;
-	struct _process*		nextSiblingProcess;
+	struct _process*        nextReadyProcess;	// Points to the next ready process in the priority queue
+	struct _process*		nextSiblingProcess;	// Points to the next child belonging to this process' parent
+	struct _process*		pParent;			// Points to this process' parent 
+	struct _process*        pChildren;			// Points to the head child in this process' children linked list
 
-	struct _process*		pParent;   
-	struct _process*        pChildren;
-
-	char           name[MAXNAME];		/* Process name */
-	char           startArgs[MAXARG];	/* Process arguments */
-	void*		   context;				/* Process's current context */
-	short          pid;					/* Process id (pid) */
-	int            priority;
-	int (*entryPoint) (void*);			/* The entry point that is called from launch */
-	char*	       stack;
-	unsigned int   stacksize;
-	int            status;				/* READY, QUIT, BLOCKED, etc. */
+	char           name[MAXNAME];		// Process name 
+	char           startArgs[MAXARG];	// Process arguments 
+	void*		   context;				// Process's current context (i.e. READY, QUIT, BLOCKED, RUNNING) 
+	short          pid;					// Process id (pid) 
+	int            priority;			// The priority of the process, determines how quickly the dispatcher will run it 
+	int (*entryPoint) (void*);			// The entry point (function pointer) that is called from launch 
+	char*	       stack;				// Contents of the process' memory stack 
+	unsigned int   stacksize;			// Size of the memory stack allocated to the process 
+	int            status;				// READY, QUIT, BLOCKED, etc. 
 	int			   exitCode;			// The code needed by k_wait() and is input into k_exit()
 
 } Process;
 
+/*
+Queues are FIFO linked lists whose nodes are Processes.
+*/
 typedef struct _queue
 {
-	Process*	head;		// First process in queue
-	Process*	tail;		// Last process in queue
+	Process*	head;		// First process in the linked list
+	Process*	tail;		// Last process in the linked list
 	int			size;		// Total number of processes in queue
 	int			priority;	// The priority of the processes in the queue
 
